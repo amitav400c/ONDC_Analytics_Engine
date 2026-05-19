@@ -1,0 +1,38 @@
+# Go
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+vendor/
+
+# Rust
+edge-sandbox/target/
+
+# Node
+node_modules/
+dist/
+.vite/
+
+# Environment
+.env
+*.local
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Docker
+docker-compose.override.yml
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Build artifacts
+*.log
+tmp/

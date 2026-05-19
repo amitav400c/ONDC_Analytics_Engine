@@ -1,0 +1,17 @@
+syntax = "proto3";
+
+package sandbox;
+
+service SandboxService {
+  rpc SanitizePayload(SanitizeRequest) returns (SanitizeResponse);
+}
+
+message SanitizeRequest {
+  string payload_json = 1;
+}
+
+message SanitizeResponse {
+  string sanitized_json = 1;
+  bool redacted = 2;
+  uint32 fields_redacted = 3;
+}
