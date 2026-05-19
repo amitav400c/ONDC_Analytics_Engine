@@ -30,12 +30,14 @@ impl SandboxService for SandboxServer {
         let payload = request.into_inner().payload_json;
 
         match self.redaction_engine.redact(&payload) {
-            Ok((sanitized, count)) => {
-                info!(fields_redacted = count, "payload sanitized");
+            Ok((sanitized, count, is_safe, reason)) => {
+                info!(fields_redacted = count, is_safe = is_safe, "payload processed");
                 Ok(Response::new(SanitizeResponse {
                     sanitized_json: sanitized,
                     redacted: count > 0,
                     fields_redacted: count,
+                    is_safe,
+                    waf_violation_reason: reason,
                 }))
             }
             Err(e) => {
@@ -44,6 +46,8 @@ impl SandboxService for SandboxServer {
                     sanitized_json: payload,
                     redacted: false,
                     fields_redacted: 0,
+                    is_safe: true,
+                    waf_violation_reason: "".to_string(),
                 }))
             }
         }

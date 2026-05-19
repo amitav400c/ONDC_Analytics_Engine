@@ -73,15 +73,20 @@ func (wh *Webhook) Handle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Attempt PII redaction via edge sandbox
+	// Attempt PII redaction and WAF checks via edge sandbox
 	sanitized := string(body)
 	if wh.sbx.IsConnected() {
-		result, err := wh.sbx.Sanitize(r.Context(), sanitized)
+		result, isSafe, reason, err := wh.sbx.Sanitize(r.Context(), sanitized)
 		if err != nil {
 			log.Printf("sandbox redaction failed (passthrough): %v", err)
 			// Fallback: do basic redaction in Go
 			sanitized = basicRedact(sanitized)
 		} else {
+			if !isSafe {
+				log.Printf("WAF blocked request: %s", reason)
+				http.Error(w, fmt.Sprintf(`{"error":"%s"}`, reason), http.StatusBadRequest)
+				return
+			}
 			sanitized = result
 		}
 	} else {
