@@ -62,8 +62,6 @@ services:
       POSTGRES_USER: ondc
       POSTGRES_PASSWORD: ondc_secret
       POSTGRES_DB: ondc_auth
-    ports:
-      - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./postgres/init.sql:/docker-entrypoint-initdb.d/init.sql

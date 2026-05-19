@@ -75,17 +75,22 @@ func (wh *Webhook) Handle(w http.ResponseWriter, r *http.Request) {
 
 	// Attempt PII redaction via edge sandbox
 	sanitized := string(body)
+	var redactErr error
+
 	if wh.sbx.IsConnected() {
-		result, err := wh.sbx.Sanitize(r.Context(), sanitized)
-		if err != nil {
-			log.Printf("sandbox redaction failed (passthrough): %v", err)
-			// Fallback: do basic redaction in Go
-			sanitized = basicRedact(sanitized)
-		} else {
-			sanitized = result
+		sanitized, redactErr = wh.sbx.Sanitize(r.Context(), string(body))
+		if redactErr != nil {
+			log.Printf("sandbox redaction failed: %v, falling back to basicRedact", redactErr)
+			sanitized, redactErr = basicRedact(string(body))
 		}
 	} else {
-		sanitized = basicRedact(sanitized)
+		sanitized, redactErr = basicRedact(string(body))
+	}
+
+	if redactErr != nil {
+		log.Printf("redaction completely failed: %v", redactErr)
+		http.Error(w, `{"error":"invalid payload for redaction"}`, http.StatusBadRequest)
+		return
 	}
 
 	// Extract fields for the flat event
@@ -132,15 +137,18 @@ func extractEvent(p BecknPayload, sanitizedJSON string) FlatEvent {
 }
 
 // basicRedact performs simple PII redaction when the WASM sandbox is unavailable.
-// TODO: This is a fallback — the WASM sandbox provides cryptographically proper redaction.
-func basicRedact(payload string) string {
+// Returns an error if the JSON is invalid, ensuring we fail-closed to prevent PII leaks.
+func basicRedact(payload string) (string, error) {
 	var raw map[string]interface{}
 	if err := json.Unmarshal([]byte(payload), &raw); err != nil {
-		return payload
+		return "", fmt.Errorf("failed to parse json for redaction: %w", err)
 	}
 	redactRecursive(raw)
-	out, _ := json.Marshal(raw)
-	return string(out)
+	out, err := json.Marshal(raw)
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal redacted json: %w", err)
+	}
+	return string(out), nil
 }
 
 func redactRecursive(m map[string]interface{}) {
