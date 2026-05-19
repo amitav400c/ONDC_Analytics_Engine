@@ -50,11 +50,16 @@ type FlatEvent struct {
 	GPSLng     float64 `json:"gps_lng"`
 	Amount     float64 `json:"amount"`
 	Status     string  `json:"status"`
-	Domain     string  `json:"domain"`
-	RawPayload string  `json:"raw_payload"`
+	Domain           string  `json:"domain"`
+	RawPayload       string  `json:"raw_payload"`
+	SandboxLatencyMs float64 `json:"sandbox_latency_ms"`
+	KafkaLatencyMs   float64 `json:"kafka_latency_ms"`
+	TotalLatencyMs   float64 `json:"total_latency_ms"`
 }
 
 func (wh *Webhook) Handle(w http.ResponseWriter, r *http.Request) {
+	totalStart := time.Now()
+
 	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20)) // 1MB limit
 	if err != nil {
 		http.Error(w, `{"error":"failed to read body"}`, http.StatusBadRequest)
@@ -77,6 +82,7 @@ func (wh *Webhook) Handle(w http.ResponseWriter, r *http.Request) {
 	sanitized := string(body)
 	var redactErr error
 
+	sandboxStart := time.Now()
 	if wh.sbx.IsConnected() {
 		sanitized, redactErr = wh.sbx.Sanitize(r.Context(), string(body))
 		if redactErr != nil {
@@ -86,6 +92,7 @@ func (wh *Webhook) Handle(w http.ResponseWriter, r *http.Request) {
 	} else {
 		sanitized, redactErr = basicRedact(string(body))
 	}
+	sandboxLatency := float64(time.Since(sandboxStart).Microseconds()) / 1000.0
 
 	if redactErr != nil {
 		log.Printf("redaction completely failed: %v", redactErr)
@@ -95,6 +102,9 @@ func (wh *Webhook) Handle(w http.ResponseWriter, r *http.Request) {
 
 	// Extract fields for the flat event
 	event := extractEvent(payload, sanitized)
+	event.SandboxLatencyMs = sandboxLatency
+	event.TotalLatencyMs = float64(time.Since(totalStart).Microseconds()) / 1000.0
+	// We can't know Kafka publish latency before we publish, so we leave it as 0 for this event
 
 	eventJSON, err := json.Marshal(event)
 	if err != nil {
@@ -116,23 +126,26 @@ func (wh *Webhook) Handle(w http.ResponseWriter, r *http.Request) {
 func extractEvent(p BecknPayload, sanitizedJSON string) FlatEvent {
 	ts := p.Context.Timestamp
 	if ts == "" {
-		ts = time.Now().UTC().Format(time.RFC3339Nano)
+		ts = time.Now().UTC().Format("2006-01-02T15:04:05.000Z")
 	}
 	return FlatEvent{
-		EventID:    fmt.Sprintf("%s-%d", p.Context.TransactionID, time.Now().UnixNano()),
-		EventType:  p.Context.Action,
-		Action:     p.Context.Action,
-		City:       p.Context.City,
-		Timestamp:  ts,
-		OrderID:    p.Context.TransactionID,
-		SellerID:   extractField(sanitizedJSON, "seller_id"),
-		BuyerHash:  extractField(sanitizedJSON, "buyer_hash"),
-		GPSLat:     extractFloat(sanitizedJSON, "gps_lat"),
-		GPSLng:     extractFloat(sanitizedJSON, "gps_lng"),
-		Amount:     extractFloat(sanitizedJSON, "amount"),
-		Status:     "active",
-		Domain:     p.Context.Domain,
-		RawPayload: sanitizedJSON,
+		EventID:          fmt.Sprintf("%s-%d", p.Context.TransactionID, time.Now().UnixNano()),
+		EventType:        p.Context.Action,
+		Action:           p.Context.Action,
+		City:             p.Context.City,
+		Timestamp:        ts,
+		OrderID:          p.Context.TransactionID,
+		SellerID:         extractField(sanitizedJSON, "seller_id"),
+		BuyerHash:        extractField(sanitizedJSON, "buyer_hash"),
+		GPSLat:           extractFloat(sanitizedJSON, "gps_lat"),
+		GPSLng:           extractFloat(sanitizedJSON, "gps_lng"),
+		Amount:           extractFloat(sanitizedJSON, "amount"),
+		Status:           "active",
+		Domain:           p.Context.Domain,
+		RawPayload:       sanitizedJSON,
+		SandboxLatencyMs: 0, // Set later
+		KafkaLatencyMs:   0, // Set later
+		TotalLatencyMs:   0, // Set later
 	}
 }
 
