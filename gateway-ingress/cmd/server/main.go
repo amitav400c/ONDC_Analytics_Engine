@@ -19,6 +19,7 @@ import (
 	"github.com/amitav400c/ondc-analytics-gateway/gateway-ingress/internal/handler"
 	"github.com/amitav400c/ondc-analytics-gateway/gateway-ingress/internal/producer"
 	"github.com/amitav400c/ondc-analytics-gateway/gateway-ingress/internal/sandbox"
+	"github.com/amitav400c/ondc-analytics-gateway/gateway-ingress/internal/store"
 )
 
 func main() {
@@ -38,8 +39,17 @@ func main() {
 	sbx := sandbox.NewClient(socketPath)
 	defer sbx.Close()
 
+	redisAddr := getEnv("REDIS_ADDR", "localhost:6379")
+
+	// Initialize Redis for rate limiting & quotas
+	redisStore, err := store.NewRedisStore(redisAddr)
+	if err != nil {
+		log.Printf("warning: redis connection failed (%v), rate limiting will be disabled", err)
+		redisStore = nil // handled gracefully in handler if nil
+	}
+
 	// Wire up handler
-	wh := handler.NewWebhook(prod, sbx)
+	wh := handler.NewWebhook(prod, sbx, redisStore)
 
 	r := chi.NewRouter()
 	r.Use(middleware.Logger)
