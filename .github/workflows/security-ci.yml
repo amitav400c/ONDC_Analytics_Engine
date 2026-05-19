@@ -2,7 +2,7 @@ name: Security CI/CD Pipeline
 
 on:
   push:
-    branches: [ "main" ]
+    branches: [ "main", "feat/*" ] # Triggers on main and any branch starting with feat/
   pull_request:
     branches: [ "main" ]
 
