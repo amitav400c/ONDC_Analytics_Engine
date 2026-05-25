@@ -1,4 +1,4 @@
-FROM rust:1.85-slim AS builder
+FROM rust:bookworm-slim AS builder
 RUN apt-get update && apt-get install -y protobuf-compiler && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY Cargo.toml Cargo.lock* ./
