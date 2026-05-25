@@ -66,6 +66,7 @@ func main() {
 		r.Get("/api/v1/metrics/funnel", h.Funnel)
 		r.Get("/api/v1/metrics/cancellations", h.Cancellations)
 		r.Get("/api/v1/metrics/volume", h.Volume)
+		r.Get("/api/v1/metrics/latency", h.Latency)
 		r.Get("/api/v1/events/recent", h.RecentEvents)
 	})
 

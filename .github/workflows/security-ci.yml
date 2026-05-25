@@ -1,0 +1,68 @@
+name: Security CI/CD Pipeline
+
+on:
+  push:
+    branches: [ "main" ] # Triggers on main and any branch starting with feat/
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  sast:
+    name: Static Analysis (SAST)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+      
+      - name: Run Gosec Security Scanner
+        uses: securego/gosec@master
+        with:
+          args: ./gateway-ingress/... ./analytics-api/...
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+      
+      - name: Run Cargo Audit
+        run: |
+          cargo install cargo-audit
+          cd edge-sandbox && cargo audit
+
+  container-scan:
+    name: Container Vulnerability Scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Build Docker Images
+        run: docker compose -p ondcanalytics build gateway-ingress edge-sandbox analytics-api frontend-dashboard
+
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: 'ondcanalytics-gateway-ingress:latest'
+          format: 'table'
+          exit-code: '1'
+          ignore-unfixed: true
+          vuln-type: 'os,library'
+          severity: 'CRITICAL,HIGH'
+
+  dast:
+    name: Dynamic Analysis (DAST) & Fuzzing
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Start Docker Compose Stack
+        run: docker compose up -d --build
+
+      - name: Wait for services to be healthy
+        run: sleep 30
+
+      - name: Run DAST Pentest Script
+        run: |
+          npm install -g axios
+          node scripts/security-test.js

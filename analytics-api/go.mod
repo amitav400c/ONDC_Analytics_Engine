@@ -1,6 +1,6 @@
 module github.com/amitav400c/ondc-analytics-gateway/analytics-api
 
-go 1.22
+go 1.24
 
 require (
 	github.com/ClickHouse/clickhouse-go/v2 v2.26.0
