@@ -5,6 +5,7 @@
 mod engine;
 
 use std::env;
+use std::os::unix::fs::PermissionsExt;
 use tonic::{transport::Server, Request, Response, Status};
 use tokio::net::UnixListener;
 use tokio_stream::wrappers::UnixListenerStream;
@@ -71,9 +72,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     let uds = UnixListener::bind(&socket_path)?;
+    
+    // Enforce 0600 permissions on the UDS for security
+    let mut perms = std::fs::metadata(&socket_path)?.permissions();
+    perms.set_mode(0o600);
+    std::fs::set_permissions(&socket_path, perms)?;
+
     let uds_stream = UnixListenerStream::new(uds);
 
-    info!(path = %socket_path, "edge-sandbox listening on UDS");
+    info!(path = %socket_path, "edge-sandbox listening on UDS with 0600 permissions");
 
     Server::builder()
         .add_service(SandboxServiceServer::new(server))

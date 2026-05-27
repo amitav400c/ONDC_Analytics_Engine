@@ -198,3 +198,22 @@ func (h *Handler) RecentEvents(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, map[string]interface{}{"events": events})
 }
+
+func (h *Handler) Latency(w http.ResponseWriter, r *http.Request) {
+	minutes := 60
+	if m := r.URL.Query().Get("minutes"); m != "" {
+		if parsed, err := strconv.Atoi(m); err == nil {
+			minutes = parsed
+		}
+	}
+
+	points, err := h.ch.Latency(r.Context(), minutes)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "query failed: "+err.Error())
+		return
+	}
+	if points == nil {
+		points = []store.LatencyPoint{}
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{"latency": points})
+}

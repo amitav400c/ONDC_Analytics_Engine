@@ -71,3 +71,11 @@ export function useRecentEvents(limit = 20) {
     refetchInterval: 5000,
   });
 }
+
+export function useLatency(minutes = 60) {
+  return useQuery<{ latency: any[] }>({
+    queryKey: ['latency', minutes],
+    queryFn: () => apiFetch(`/metrics/latency?minutes=${minutes}`),
+    refetchInterval: 15000,
+  });
+}

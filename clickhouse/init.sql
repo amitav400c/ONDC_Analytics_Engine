@@ -19,7 +19,10 @@ CREATE TABLE IF NOT EXISTS ondc.ondc_events_queue (
     amount       Float64,
     status       String,
     domain       String,
-    raw_payload  String
+    raw_payload  String,
+    sandbox_latency_ms Float64,
+    kafka_latency_ms   Float64,
+    total_latency_ms   Float64
 ) ENGINE = Kafka
 SETTINGS
     kafka_broker_list = 'redpanda:9092',
@@ -44,6 +47,9 @@ CREATE TABLE IF NOT EXISTS ondc.ondc_events (
     status       String,
     domain       String,
     raw_payload  String,
+    sandbox_latency_ms Float64,
+    kafka_latency_ms   Float64,
+    total_latency_ms   Float64,
     inserted_at  DateTime DEFAULT now()
 ) ENGINE = MergeTree()
 ORDER BY (event_type, city, timestamp)
@@ -67,7 +73,10 @@ SELECT
     amount,
     status,
     domain,
-    raw_payload
+    raw_payload,
+    sandbox_latency_ms,
+    kafka_latency_ms,
+    total_latency_ms
 FROM ondc.ondc_events_queue;
 
 -- Aggregation view: funnel metrics
