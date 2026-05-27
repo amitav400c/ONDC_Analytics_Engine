@@ -30,7 +30,7 @@ services:
     depends_on:
       redpanda:
         condition: service_healthy
-    entrypoint: ["/bin/sh", "-c", "rpk topic create ondc_events_sanitized --brokers redpanda:9092 --partitions 3 --replicas 1 || echo 'Topic already exists or created successfully'"]
+    entrypoint: ["/bin/sh", "-c", "rpk topic create ondc_events_sanitized --brokers redpanda:9092 --partitions 3 --replicas 1 || echo 'Topic exists or error ignored'"]
     restart: "no"
 
   clickhouse:
@@ -62,8 +62,6 @@ services:
       POSTGRES_USER: ondc
       POSTGRES_PASSWORD: ondc_secret
       POSTGRES_DB: ondc_auth
-    ports:
-      - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./postgres/init.sql:/docker-entrypoint-initdb.d/init.sql

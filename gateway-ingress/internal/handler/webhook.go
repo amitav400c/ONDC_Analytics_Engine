@@ -53,11 +53,16 @@ type FlatEvent struct {
 	GPSLng     float64 `json:"gps_lng"`
 	Amount     float64 `json:"amount"`
 	Status     string  `json:"status"`
-	Domain     string  `json:"domain"`
-	RawPayload string  `json:"raw_payload"`
+	Domain           string  `json:"domain"`
+	RawPayload       string  `json:"raw_payload"`
+	SandboxLatencyMs float64 `json:"sandbox_latency_ms"`
+	KafkaLatencyMs   float64 `json:"kafka_latency_ms"`
+	TotalLatencyMs   float64 `json:"total_latency_ms"`
 }
 
 func (wh *Webhook) Handle(w http.ResponseWriter, r *http.Request) {
+	totalStart := time.Now()
+
 	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20)) // 1MB limit
 	if err != nil {
 		http.Error(w, `{"error":"failed to read body"}`, http.StatusBadRequest)
@@ -90,21 +95,31 @@ func (wh *Webhook) Handle(w http.ResponseWriter, r *http.Request) {
 
 	// Attempt PII redaction via edge sandbox
 	sanitized := string(body)
+	var redactErr error
+
+	sandboxStart := time.Now()
 	if wh.sbx.IsConnected() {
-		result, err := wh.sbx.Sanitize(r.Context(), sanitized)
-		if err != nil {
-			log.Printf("sandbox redaction failed (passthrough): %v", err)
-			// Fallback: do basic redaction in Go
-			sanitized = basicRedact(sanitized)
-		} else {
-			sanitized = result
+		sanitized, redactErr = wh.sbx.Sanitize(r.Context(), string(body))
+		if redactErr != nil {
+			log.Printf("sandbox redaction failed: %v, falling back to basicRedact", redactErr)
+			sanitized, redactErr = basicRedact(string(body))
 		}
 	} else {
-		sanitized = basicRedact(sanitized)
+		sanitized, redactErr = basicRedact(string(body))
+	}
+	sandboxLatency := float64(time.Since(sandboxStart).Microseconds()) / 1000.0
+
+	if redactErr != nil {
+		log.Printf("redaction completely failed: %v", redactErr)
+		http.Error(w, `{"error":"invalid payload for redaction"}`, http.StatusBadRequest)
+		return
 	}
 
 	// Extract fields for the flat event
 	event := extractEvent(payload, sanitized)
+	event.SandboxLatencyMs = sandboxLatency
+	event.TotalLatencyMs = float64(time.Since(totalStart).Microseconds()) / 1000.0
+	// We can't know Kafka publish latency before we publish, so we leave it as 0 for this event
 
 	eventJSON, err := json.Marshal(event)
 	if err != nil {
@@ -126,36 +141,42 @@ func (wh *Webhook) Handle(w http.ResponseWriter, r *http.Request) {
 func extractEvent(p BecknPayload, sanitizedJSON string) FlatEvent {
 	ts := p.Context.Timestamp
 	if ts == "" {
-		ts = time.Now().UTC().Format(time.RFC3339Nano)
+		ts = time.Now().UTC().Format("2006-01-02T15:04:05.000Z")
 	}
 	return FlatEvent{
-		EventID:    fmt.Sprintf("%s-%d", p.Context.TransactionID, time.Now().UnixNano()),
-		EventType:  p.Context.Action,
-		Action:     p.Context.Action,
-		City:       p.Context.City,
-		Timestamp:  ts,
-		OrderID:    p.Context.TransactionID,
-		SellerID:   extractField(sanitizedJSON, "seller_id"),
-		BuyerHash:  extractField(sanitizedJSON, "buyer_hash"),
-		GPSLat:     extractFloat(sanitizedJSON, "gps_lat"),
-		GPSLng:     extractFloat(sanitizedJSON, "gps_lng"),
-		Amount:     extractFloat(sanitizedJSON, "amount"),
-		Status:     "active",
-		Domain:     p.Context.Domain,
-		RawPayload: sanitizedJSON,
+		EventID:          fmt.Sprintf("%s-%d", p.Context.TransactionID, time.Now().UnixNano()),
+		EventType:        p.Context.Action,
+		Action:           p.Context.Action,
+		City:             p.Context.City,
+		Timestamp:        ts,
+		OrderID:          p.Context.TransactionID,
+		SellerID:         extractField(sanitizedJSON, "seller_id"),
+		BuyerHash:        extractField(sanitizedJSON, "buyer_hash"),
+		GPSLat:           extractFloat(sanitizedJSON, "gps_lat"),
+		GPSLng:           extractFloat(sanitizedJSON, "gps_lng"),
+		Amount:           extractFloat(sanitizedJSON, "amount"),
+		Status:           "active",
+		Domain:           p.Context.Domain,
+		RawPayload:       sanitizedJSON,
+		SandboxLatencyMs: 0, // Set later
+		KafkaLatencyMs:   0, // Set later
+		TotalLatencyMs:   0, // Set later
 	}
 }
 
 // basicRedact performs simple PII redaction when the WASM sandbox is unavailable.
-// TODO: This is a fallback — the WASM sandbox provides cryptographically proper redaction.
-func basicRedact(payload string) string {
+// Returns an error if the JSON is invalid, ensuring we fail-closed to prevent PII leaks.
+func basicRedact(payload string) (string, error) {
 	var raw map[string]interface{}
 	if err := json.Unmarshal([]byte(payload), &raw); err != nil {
-		return payload
+		return "", fmt.Errorf("failed to parse json for redaction: %w", err)
 	}
 	redactRecursive(raw)
-	out, _ := json.Marshal(raw)
-	return string(out)
+	out, err := json.Marshal(raw)
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal redacted json: %w", err)
+	}
+	return string(out), nil
 }
 
 func redactRecursive(m map[string]interface{}) {

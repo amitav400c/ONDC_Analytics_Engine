@@ -41,6 +41,13 @@ type RecentEvent struct {
 	Amount    float64 `json:"amount"`
 }
 
+type LatencyPoint struct {
+	Time             string  `json:"time"`
+	AvgSandbox       float64 `json:"avg_sandbox_ms"`
+	AvgKafka         float64 `json:"avg_kafka_ms"`
+	AvgTotal         float64 `json:"avg_total_ms"`
+}
+
 func NewClickHouse(addr, database string) (*ClickHouse, error) {
 	conn, err := clickhouse.Open(&clickhouse.Options{
 		Addr: []string{addr},
@@ -196,6 +203,38 @@ func (ch *ClickHouse) RecentEvents(ctx context.Context, limit int) ([]RecentEven
 			return nil, err
 		}
 		result = append(result, e)
+	}
+	return result, nil
+}
+
+func (ch *ClickHouse) Latency(ctx context.Context, minutes int) ([]LatencyPoint, error) {
+	if minutes <= 0 {
+		minutes = 60
+	}
+	query := `
+		SELECT 
+			toString(toStartOfMinute(timestamp)) AS time,
+			avg(sandbox_latency_ms) AS avg_sandbox,
+			avg(kafka_latency_ms) AS avg_kafka,
+			avg(total_latency_ms) AS avg_total
+		FROM ondc_events
+		WHERE timestamp >= now() - INTERVAL ? MINUTE
+		GROUP BY time
+		ORDER BY time ASC`
+
+	rows, err := ch.conn.Query(ctx, query, minutes)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var result []LatencyPoint
+	for rows.Next() {
+		var p LatencyPoint
+		if err := rows.Scan(&p.Time, &p.AvgSandbox, &p.AvgKafka, &p.AvgTotal); err != nil {
+			return nil, err
+		}
+		result = append(result, p)
 	}
 	return result, nil
 }

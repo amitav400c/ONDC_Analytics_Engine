@@ -4,6 +4,7 @@ import FunnelChart from './FunnelChart';
 import VolumeChart from './VolumeChart';
 import CancellationTable from './CancellationTable';
 import RecentEventsTable from './RecentEventsTable';
+import { LatencyChart } from './LatencyChart';
 
 interface Props {
   user: User;
@@ -60,6 +61,13 @@ export default function Layout({ user, onLogout }: Props) {
           <div className="glass-card p-6 animate-slide-up" style={{ animationDelay: '100ms' }}>
             <h2 className="text-lg font-semibold text-white/90 mb-4">Daily Volume</h2>
             <VolumeChart />
+          </div>
+        </div>
+
+        {/* Middle row: Latency */}
+        <div className="grid grid-cols-1 gap-6">
+          <div className="glass-card p-6 animate-slide-up" style={{ animationDelay: '150ms' }}>
+            <LatencyChart />
           </div>
         </div>
 
