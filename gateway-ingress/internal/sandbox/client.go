@@ -9,6 +9,8 @@ import (
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
+
+	pb "github.com/amitav400c/ondc-analytics-gateway/gateway-ingress/internal/proto/sandbox"
 )
 
 // Client connects to the Rust edge-sandbox over UDS for PII redaction.
@@ -16,6 +18,7 @@ import (
 type Client struct {
 	socketPath string
 	conn       *grpc.ClientConn
+	client     pb.SandboxServiceClient
 	connected  bool
 	mu         sync.RWMutex
 }
@@ -43,6 +46,7 @@ func (c *Client) connectLoop() {
 
 		c.mu.Lock()
 		c.conn = conn
+		c.client = pb.NewSandboxServiceClient(conn)
 		c.connected = true
 		c.mu.Unlock()
 		log.Println("connected to edge-sandbox via UDS")
@@ -56,19 +60,31 @@ func (c *Client) IsConnected() bool {
 	return c.connected
 }
 
-// Sanitize sends payload to the WASM sandbox for PII redaction.
-// TODO: Replace with generated protobuf client once sandbox.proto is compiled
-func (c *Client) Sanitize(ctx context.Context, payload string) (string, error) {
+// Sanitize sends payload to the WASM sandbox for PII redaction and WAF checks.
+func (c *Client) Sanitize(ctx context.Context, payload string) (string, bool, string, error) {
 	c.mu.RLock()
-	defer c.mu.RUnlock()
+	client := c.client
+	connected := c.connected
+	c.mu.RUnlock()
 
-	if !c.connected || c.conn == nil {
-		return payload, nil // Passthrough
+	if !connected || client == nil {
+		// Passthrough if sandbox is down (Fail-open for PII, but logs warning)
+		return payload, true, "", nil
 	}
 
-	// TODO: Use generated SandboxServiceClient here
-	// For Phase 1 (dumb pipeline), we just pass through
-	return payload, nil
+	req := &pb.SanitizeRequest{
+		PayloadJson: payload,
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+
+	resp, err := client.SanitizePayload(ctx, req)
+	if err != nil {
+		return payload, true, "", err
+	}
+
+	return resp.SanitizedJson, resp.IsSafe, resp.WafViolationReason, nil
 }
 
 func (c *Client) Close() error {
