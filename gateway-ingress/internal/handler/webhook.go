@@ -12,26 +12,29 @@ import (
 
 	"github.com/amitav400c/ondc-analytics-gateway/gateway-ingress/internal/producer"
 	"github.com/amitav400c/ondc-analytics-gateway/gateway-ingress/internal/sandbox"
+	"github.com/amitav400c/ondc-analytics-gateway/gateway-ingress/internal/store"
 )
 
 type Webhook struct {
-	prod *producer.Producer
-	sbx  *sandbox.Client
+	prod       *producer.Producer
+	sbx        *sandbox.Client
+	redisStore *store.RedisStore
 }
 
-func NewWebhook(prod *producer.Producer, sbx *sandbox.Client) *Webhook {
-	return &Webhook{prod: prod, sbx: sbx}
+func NewWebhook(prod *producer.Producer, sbx *sandbox.Client, rs *store.RedisStore) *Webhook {
+	return &Webhook{prod: prod, sbx: sbx, redisStore: rs}
 }
 
 // BecknPayload is a minimal representation of a Beckn protocol message.
 // We only parse what we need; the full JSON goes to Redpanda.
 type BecknPayload struct {
 	Context struct {
-		Action      string `json:"action"`
-		Domain      string `json:"domain"`
-		City        string `json:"city"`
+		Action        string `json:"action"`
+		Domain        string `json:"domain"`
+		City          string `json:"city"`
 		TransactionID string `json:"transaction_id"`
-		Timestamp   string `json:"timestamp"`
+		Timestamp     string `json:"timestamp"`
+		BapID         string `json:"bap_id"`
 	} `json:"context"`
 	Message json.RawMessage `json:"message"`
 }
@@ -50,11 +53,16 @@ type FlatEvent struct {
 	GPSLng     float64 `json:"gps_lng"`
 	Amount     float64 `json:"amount"`
 	Status     string  `json:"status"`
-	Domain     string  `json:"domain"`
-	RawPayload string  `json:"raw_payload"`
+	Domain           string  `json:"domain"`
+	RawPayload       string  `json:"raw_payload"`
+	SandboxLatencyMs float64 `json:"sandbox_latency_ms"`
+	KafkaLatencyMs   float64 `json:"kafka_latency_ms"`
+	TotalLatencyMs   float64 `json:"total_latency_ms"`
 }
 
 func (wh *Webhook) Handle(w http.ResponseWriter, r *http.Request) {
+	totalStart := time.Now()
+
 	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20)) // 1MB limit
 	if err != nil {
 		http.Error(w, `{"error":"failed to read body"}`, http.StatusBadRequest)
@@ -73,19 +81,42 @@ func (wh *Webhook) Handle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Attempt PII redaction via edge sandbox
+	// Enforce Rate Limits & Quotas (if Redis is available)
+	if wh.redisStore != nil {
+		allowed, err := wh.redisStore.CheckLimits(r.Context(), payload.Context.BapID)
+		if err != nil {
+			log.Printf("redis limit check error: %v", err)
+			// Decide whether to fail open or fail closed. Failing open for now:
+		} else if !allowed {
+			http.Error(w, `{"error":"rate limit or quota exceeded"}`, http.StatusTooManyRequests)
+			return
+		}
+	}
+
+	// Attempt PII redaction and WAF checks via edge sandbox
 	sanitized := string(body)
 	var redactErr error
 
+	sandboxStart := time.Now()
 	if wh.sbx.IsConnected() {
-		sanitized, redactErr = wh.sbx.Sanitize(r.Context(), string(body))
-		if redactErr != nil {
-			log.Printf("sandbox redaction failed: %v, falling back to basicRedact", redactErr)
-			sanitized, redactErr = basicRedact(string(body))
+		result, isSafe, reason, err := wh.sbx.Sanitize(r.Context(), sanitized)
+		if err != nil {
+			log.Printf("sandbox redaction failed (passthrough): %v", err)
+			// Fallback: do basic redaction in Go
+			sanitized, redactErr = basicRedact(sanitized)
+		} else {
+			if !isSafe {
+				log.Printf("WAF blocked request: %s", reason)
+				http.Error(w, fmt.Sprintf(`{"error":"%s"}`, reason), http.StatusBadRequest)
+				return
+			}
+			sanitized = result
+			redactErr = nil
 		}
 	} else {
 		sanitized, redactErr = basicRedact(string(body))
 	}
+	sandboxLatency := float64(time.Since(sandboxStart).Microseconds()) / 1000.0
 
 	if redactErr != nil {
 		log.Printf("redaction completely failed: %v", redactErr)
@@ -95,6 +126,9 @@ func (wh *Webhook) Handle(w http.ResponseWriter, r *http.Request) {
 
 	// Extract fields for the flat event
 	event := extractEvent(payload, sanitized)
+	event.SandboxLatencyMs = sandboxLatency
+	event.TotalLatencyMs = float64(time.Since(totalStart).Microseconds()) / 1000.0
+	// We can't know Kafka publish latency before we publish, so we leave it as 0 for this event
 
 	eventJSON, err := json.Marshal(event)
 	if err != nil {
@@ -116,23 +150,26 @@ func (wh *Webhook) Handle(w http.ResponseWriter, r *http.Request) {
 func extractEvent(p BecknPayload, sanitizedJSON string) FlatEvent {
 	ts := p.Context.Timestamp
 	if ts == "" {
-		ts = time.Now().UTC().Format(time.RFC3339Nano)
+		ts = time.Now().UTC().Format("2006-01-02T15:04:05.000Z")
 	}
 	return FlatEvent{
-		EventID:    fmt.Sprintf("%s-%d", p.Context.TransactionID, time.Now().UnixNano()),
-		EventType:  p.Context.Action,
-		Action:     p.Context.Action,
-		City:       p.Context.City,
-		Timestamp:  ts,
-		OrderID:    p.Context.TransactionID,
-		SellerID:   extractField(sanitizedJSON, "seller_id"),
-		BuyerHash:  extractField(sanitizedJSON, "buyer_hash"),
-		GPSLat:     extractFloat(sanitizedJSON, "gps_lat"),
-		GPSLng:     extractFloat(sanitizedJSON, "gps_lng"),
-		Amount:     extractFloat(sanitizedJSON, "amount"),
-		Status:     "active",
-		Domain:     p.Context.Domain,
-		RawPayload: sanitizedJSON,
+		EventID:          fmt.Sprintf("%s-%d", p.Context.TransactionID, time.Now().UnixNano()),
+		EventType:        p.Context.Action,
+		Action:           p.Context.Action,
+		City:             p.Context.City,
+		Timestamp:        ts,
+		OrderID:          p.Context.TransactionID,
+		SellerID:         extractField(sanitizedJSON, "seller_id"),
+		BuyerHash:        extractField(sanitizedJSON, "buyer_hash"),
+		GPSLat:           extractFloat(sanitizedJSON, "gps_lat"),
+		GPSLng:           extractFloat(sanitizedJSON, "gps_lng"),
+		Amount:           extractFloat(sanitizedJSON, "amount"),
+		Status:           "active",
+		Domain:           p.Context.Domain,
+		RawPayload:       sanitizedJSON,
+		SandboxLatencyMs: 0, // Set later
+		KafkaLatencyMs:   0, // Set later
+		TotalLatencyMs:   0, // Set later
 	}
 }
 

@@ -30,7 +30,7 @@ services:
     depends_on:
       redpanda:
         condition: service_healthy
-    entrypoint: ["/bin/sh", "-c", "rpk topic create ondc_events_sanitized --brokers redpanda:9092 --partitions 3 --replicas 1 && echo 'Topic created successfully'"]
+    entrypoint: ["/bin/sh", "-c", "rpk topic create ondc_events_sanitized --brokers redpanda:9092 --partitions 3 --replicas 1 || echo 'Topic exists or error ignored'"]
     restart: "no"
 
   clickhouse:
@@ -71,6 +71,19 @@ services:
       timeout: 3s
       retries: 5
 
+  redis:
+    image: redis:7-alpine
+    container_name: ondc-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
   # --- Application Services ---
   gateway-ingress:
     build:
@@ -84,6 +97,7 @@ services:
       REDPANDA_BROKERS: redpanda:9092
       REDPANDA_TOPIC: ondc_events_sanitized
       SANDBOX_SOCKET_PATH: /tmp/sandbox.sock
+      REDIS_ADDR: redis:6379
     volumes:
       - sandbox_socket:/tmp
     depends_on:
@@ -155,3 +169,4 @@ volumes:
   clickhouse_data:
   postgres_data:
   sandbox_socket:
+  redis_data:
