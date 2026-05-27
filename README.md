@@ -4,27 +4,7 @@
 
 ## Architecture
 
-```
-┌─────────────┐     ┌──────────────────┐     ┌──────────────┐
-│ Load Tester  │────▶│  Gateway Ingress  │────▶│   Redpanda   │
-│  (Node.js)   │     │   (Go + Chi)     │     │  (Streaming) │
-└─────────────┘     └────────┬─────────┘     └──────┬───────┘
-                             │ gRPC/UDS              │ Kafka Engine
-                    ┌────────▼─────────┐     ┌──────▼───────┐
-                    │  Edge Sandbox    │     │  ClickHouse  │
-                    │ (Rust+Wasmtime)  │     │   (OLAP)     │
-                    └──────────────────┘     └──────┬───────┘
-                                                     │ SQL
-                                             ┌──────▼───────┐
-                                             │ Analytics API │
-                                             │  (Go + Chi)  │
-                                             └──────┬───────┘
-                                                     │ REST
-                                             ┌──────▼───────┐
-                                             │  Dashboard   │
-                                             │ (React+Vite) │
-                                             └──────────────┘
-```
+<img width="1504" height="1500" alt="Blank diagram (1)" src="https://github.com/user-attachments/assets/1c5d3457-2962-4cb5-a37a-efd2d1d11502" />
 
 ## Quick Start
 
