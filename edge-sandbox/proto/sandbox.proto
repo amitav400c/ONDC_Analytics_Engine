@@ -2,6 +2,8 @@ syntax = "proto3";
 
 package sandbox;
 
+option go_package = "github.com/amitav400c/ondc-analytics-gateway/gateway-ingress/internal/proto/sandbox";
+
 service SandboxService {
   rpc SanitizePayload(SanitizeRequest) returns (SanitizeResponse);
 }
@@ -14,4 +16,6 @@ message SanitizeResponse {
   string sanitized_json = 1;
   bool redacted = 2;
   uint32 fields_redacted = 3;
+  bool is_safe = 4;
+  string waf_violation_reason = 5;
 }

@@ -23,11 +23,22 @@ impl RedactionEngine {
         Ok(Self {})
     }
 
-    /// Redacts PII from a JSON payload. Returns (sanitized_json, fields_redacted_count).
-    pub fn redact(&self, payload: &str) -> Result<(String, u32), Box<dyn std::error::Error>> {
+    /// Redacts PII and performs WAF checks. Returns (sanitized_json, fields_redacted_count, is_safe, violation_reason).
+    pub fn redact(&self, payload: &str) -> Result<(String, u32, bool, String), Box<dyn std::error::Error>> {
+        // Basic WAF Rule 1: Payload size limit (e.g., > 512KB is suspicious for a single event)
+        if payload.len() > 512 * 1024 {
+            return Ok((payload.to_string(), 0, false, "WAF: Payload exceeds size limit (512KB)".to_string()));
+        }
+
+        // Basic WAF Rule 2: SQLi and XSS signature detection
+        let upper = payload.to_uppercase();
+        if upper.contains("UNION SELECT") || upper.contains("OR 1=1") || upper.contains("<SCRIPT>") || upper.contains("DROP TABLE") {
+            return Ok((payload.to_string(), 0, false, "WAF: Malicious payload pattern detected (SQLi/XSS)".to_string()));
+        }
+
         let mut value: Value = serde_json::from_str(payload)?;
         let count = redact_recursive(&mut value);
-        Ok((serde_json::to_string(&value)?, count))
+        Ok((serde_json::to_string(&value)?, count, true, "".to_string()))
     }
 }
 
@@ -97,8 +108,9 @@ mod tests {
     fn test_phone_redaction() {
         let engine = RedactionEngine::new().unwrap();
         let input = r#"{"context":{"action":"on_confirm"},"message":{"buyer":{"phone":"9876543210"}}}"#;
-        let (output, count) = engine.redact(input).unwrap();
+        let (output, count, is_safe, _) = engine.redact(input).unwrap();
         assert!(count > 0);
+        assert!(is_safe);
         assert!(!output.contains("9876543210"));
     }
 
@@ -106,8 +118,18 @@ mod tests {
     fn test_gps_fuzzing() {
         let engine = RedactionEngine::new().unwrap();
         let input = r#"{"location":{"gps":"12.9716,77.5946"}}"#;
-        let (output, count) = engine.redact(input).unwrap();
+        let (output, count, is_safe, _) = engine.redact(input).unwrap();
         assert_eq!(count, 1);
+        assert!(is_safe);
         assert!(!output.contains("12.9716,77.5946"));
+    }
+    
+    #[test]
+    fn test_waf_rejection() {
+        let engine = RedactionEngine::new().unwrap();
+        let input = r#"{"message": "OR 1=1"}"#;
+        let (_, _, is_safe, reason) = engine.redact(input).unwrap();
+        assert!(!is_safe);
+        assert!(reason.contains("Malicious payload pattern"));
     }
 }
