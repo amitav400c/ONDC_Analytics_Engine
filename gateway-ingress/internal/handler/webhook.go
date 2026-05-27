@@ -12,26 +12,29 @@ import (
 
 	"github.com/amitav400c/ondc-analytics-gateway/gateway-ingress/internal/producer"
 	"github.com/amitav400c/ondc-analytics-gateway/gateway-ingress/internal/sandbox"
+	"github.com/amitav400c/ondc-analytics-gateway/gateway-ingress/internal/store"
 )
 
 type Webhook struct {
-	prod *producer.Producer
-	sbx  *sandbox.Client
+	prod       *producer.Producer
+	sbx        *sandbox.Client
+	redisStore *store.RedisStore
 }
 
-func NewWebhook(prod *producer.Producer, sbx *sandbox.Client) *Webhook {
-	return &Webhook{prod: prod, sbx: sbx}
+func NewWebhook(prod *producer.Producer, sbx *sandbox.Client, rs *store.RedisStore) *Webhook {
+	return &Webhook{prod: prod, sbx: sbx, redisStore: rs}
 }
 
 // BecknPayload is a minimal representation of a Beckn protocol message.
 // We only parse what we need; the full JSON goes to Redpanda.
 type BecknPayload struct {
 	Context struct {
-		Action      string `json:"action"`
-		Domain      string `json:"domain"`
-		City        string `json:"city"`
+		Action        string `json:"action"`
+		Domain        string `json:"domain"`
+		City          string `json:"city"`
 		TransactionID string `json:"transaction_id"`
-		Timestamp   string `json:"timestamp"`
+		Timestamp     string `json:"timestamp"`
+		BapID         string `json:"bap_id"`
 	} `json:"context"`
 	Message json.RawMessage `json:"message"`
 }
@@ -76,6 +79,18 @@ func (wh *Webhook) Handle(w http.ResponseWriter, r *http.Request) {
 	if payload.Context.Action == "" {
 		http.Error(w, `{"error":"missing context.action"}`, http.StatusBadRequest)
 		return
+	}
+
+	// Enforce Rate Limits & Quotas (if Redis is available)
+	if wh.redisStore != nil {
+		allowed, err := wh.redisStore.CheckLimits(r.Context(), payload.Context.BapID)
+		if err != nil {
+			log.Printf("redis limit check error: %v", err)
+			// Decide whether to fail open or fail closed. Failing open for now:
+		} else if !allowed {
+			http.Error(w, `{"error":"rate limit or quota exceeded"}`, http.StatusTooManyRequests)
+			return
+		}
 	}
 
 	// Attempt PII redaction and WAF checks via edge sandbox
